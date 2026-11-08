@@ -7,7 +7,7 @@ const SPEICHER = 'mbpc.daten.v2';
 const EINST = 'mbpc.einst.v2';
 
 let D = null;
-let E = { level: 25, archetyp: null, spez: null, menschen: '4-7', filter: 'plan', koerper: {}, erledigt: {} };
+let E = { level: 25, archetyp: null, spez: null, menschen: '4-7', koerper: {} };
 
 const $ = (s, w = document) => w.querySelector(s);
 const el = (t, k, h) => { const n = document.createElement(t); if (k) n.className = k; if (h != null) n.innerHTML = h; return n; };
@@ -136,39 +136,44 @@ function berechne(a, sn, level) {
     : (zielLauftyp === 'Lengthy' && k.groesse < 183) ? 'Controlled' : zielLauftyp;
   const schritte = schrittfolge(a, sn, erreichbar);
   const werte = basisWerte(a), basis = basisWerte(a);
-  let rest = D.apKumuliert[level];
-  const erl = E.erledigt[a + '|' + sn] || {};
-  const offen = [];
-  let laufend = null;
+  let rest = level > 0 ? D.apKumuliert[level] : 0;
 
   for (const s of schritte) {
-    if (s.kosten <= rest) {
-      rest -= s.kosten; werte[s.attr] = s.ziel;
-      if (!erl[s.attr + '>' + s.ziel]) offen.push({ ...s, teil: false });
-    } else if (!laufend) {
-      // teilweise machbar
-      const { stufe } = stufeFuer(a, s.attr);
-      let w = s.von, k2 = 0;
-      while (w < s.ziel && punktKosten(stufe, w) <= rest - k2) { k2 += punktKosten(stufe, w); w++; }
-      rest -= k2; werte[s.attr] = w;
-      laufend = { ...s, erreicht: w, teilKosten: k2 };
-      if (!erl[s.attr + '>' + s.ziel]) offen.push({ ...s, teil: true, erreicht: w, teilKosten: k2 });
-      break;
-    }
+    if (s.kosten <= rest) { rest -= s.kosten; werte[s.attr] = s.ziel; continue; }
+    // teilweise machbar
+    const { stufe } = stufeFuer(a, s.attr);
+    let w = s.von, k2 = 0;
+    while (w < s.ziel && punktKosten(stufe, w) <= rest - k2) { k2 += punktKosten(stufe, w); w++; }
+    rest -= k2; werte[s.attr] = w;
+    break;
   }
 
-  const ap = D.apKumuliert[level];
+  const ap = level > 0 ? D.apKumuliert[level] : 0;
   const lt = lauftypVon(werte, k.groesse);
   return {
-    level, werte, basis, schritte, offen, laufend, koerper: k,
+    level, werte, basis, schritte, koerper: k, erreichbar,
     apGesamt: ap, apGenutzt: ap - rest, apRest: rest,
     lauftyp: lt, zielLauftyp, lauftypOk: lt === zielLauftyp,
     spezOk: Object.entries(D.archetypen[a].spezialisierungen[sn].ziele).every(([x, v]) => (werte[x] ?? 0) >= v),
-    playstyles: D.playstyles.map(p => {
-      const teile = Object.entries(p.v).map(([x, v]) => ({ a: x, v, ok: (werte[x] ?? 0) >= v }));
-      return { name: p.n, teile, ok: teile.every(t => t.ok), fehlt: teile.filter(t => !t.ok).length };
-    }),
   };
+}
+
+/* Werte für alle Level 0 bis 55 (zwischengespeichert) */
+const VERLAUF = {};
+function verlauf(a, sn) {
+  const k = koerperVon(a);
+  const key = a + '|' + sn + '|' + k.groesse;
+  if (!VERLAUF[key]) {
+    const v = [];
+    for (let l = 0; l <= 55; l++) v.push(berechne(a, sn, l));
+    VERLAUF[key] = v;
+  }
+  return VERLAUF[key];
+}
+const erfuellt = (werte, ziele) => Object.entries(ziele).every(([x, v]) => (werte[x] ?? 0) >= v);
+function abLevel(v, test) {
+  for (let l = 1; l <= 55; l++) if (test(v[l].werte, v[l])) return l;
+  return null;
 }
 
 function karteFuer(level) {
@@ -203,12 +208,11 @@ function zeichneStart() {
   kopf('Meta Builds', 'Stand ' + datum(D.stand));
   const s = $('#s-start');
   s.innerHTML = `
-    <div class="gross">Wer wirst<br><em>du heute?</em></div>
-    <div class="unter">Alles in zwei Tipps. Wähle einen Bereich.</div>
+    <div class="gross">Die App<br><em>für Clubs</em></div>
     <div class="kacheln">
       <button class="kachel" data-z="wahl"><span class="glanz"></span>
         <span class="ic" style="color:var(--gruen)">${ic('i-tree', 27)}</span>
-        <span class="tx"><h3>Skilltree</h3><p>Fertige Verteilung für dein Level</p></span>
+        <span class="tx"><h3>Skilltree</h3><p>Mach deinen Spieler unschlagbar</p></span>
         <span class="pfeil">${ic('i-pfeil', 20)}</span></button>
       <button class="kachel" data-z="form"><span class="glanz"></span>
         <span class="ic" style="color:var(--pink)">${ic('i-form', 27)}</span>
@@ -236,7 +240,7 @@ function zeichneWahl() {
       const meta = Object.entries(d.spezialisierungen).find(([, x]) => x.meta)?.[0] || '';
       const b = el('button', 'at', `<span class="aura"></span><span class="glanz"></span>
         <span class="ring">${ic('a-' + d.icon, 26)}</span>
-        <h4>${name}</h4><div class="pos">${d.positionen}</div><span class="sp">${meta}</span>`);
+        <h4>${name}</h4><div class="pos">${d.positionen}</div><span class="spz">${meta}</span>`);
       b.style.color = d.farbe; b.style.setProperty('--c', d.farbe);
       b.onclick = () => { tick(); E.archetyp = name; E.spez = meta; merkeEinst(); zeige('build'); };
       r.append(b);
@@ -250,33 +254,36 @@ function zeichneWahl() {
 function zeichneBuild() {
   const a = E.archetyp, d = D.archetypen[a];
   if (!d) return zeige('wahl');
-  if (!d.spezialisierungen[E.spez]) E.spez = Object.keys(d.spezialisierungen)[0];
+  if (!d.spezialisierungen[E.spez]) E.spez = Object.entries(d.spezialisierungen).find(([, x]) => x.meta)?.[0] || Object.keys(d.spezialisierungen)[0];
   const sn = E.spez;
   kopf(a, `${sn} · Level ${E.level}`);
   const s = $('#s-build');
   s.innerHTML = `<div id="pk"></div>
-    <div class="chips" id="chips"></div>
     <div class="karte" id="reglerK"></div>
     <div id="rest"></div>`;
 
-  const chips = $('#chips', s);
-  for (const [n, x] of Object.entries(d.spezialisierungen)) {
-    const c = el('button', 'chip' + (n === sn ? ' an' : ''), (x.meta ? '★ ' : '') + n);
-    c.onclick = () => { tick(); E.spez = n; merkeEinst(); zeichneBuild(); };
-    chips.append(c);
-  }
-
-  const r = berechne(a, sn, E.level);
+  const k = koerperVon(a);
   $('#reglerK').innerHTML = `
-    <div class="reglerZeile"><span class="lv">DEIN LEVEL</span>
-      <span class="ap"><b id="apZahl">${r.apGenutzt}</b> / <span id="apMax">${r.apGesamt}</span> AP verteilt
-      <span id="apRest" style="display:block;color:var(--txt3);font-size:11px"></span></span></div>
+    <div class="lvKopf">
+      <span class="lv">DEIN LEVEL</span>
+      <span class="stepper">
+        <button id="lvMinus" aria-label="Ein Level zurück">−</button>
+        <b id="lvZahl">${E.level}</b>
+        <button id="lvPlus" aria-label="Ein Level weiter">+</button>
+      </span>
+    </div>
     <div class="schienenBox">
       <div class="schiene"><div class="fuell" id="fuell"></div><div id="meilen"></div></div>
-      <input type="range" id="lv" min="1" max="55" value="${E.level}">
+      <input type="range" id="lv" min="1" max="55" value="${E.level}" aria-label="Level">
     </div>
     <div class="meilenTxt"><span>1</span><span>15</span><span>30</span><span>45</span><span>55</span></div>
-    <div id="ereignis"></div>`;
+    <div class="koerperRegler">
+      <div class="krZeile"><span>Größe</span><b id="grW">${k.groesse} cm</b></div>
+      <input type="range" class="einfach" id="grR" min="160" max="205" value="${k.groesse}" aria-label="Größe">
+      <div class="krZeile" style="margin-top:8px"><span>Gewicht</span><b id="gwW">${k.gewicht} kg</b></div>
+      <input type="range" class="einfach" id="gwR" min="55" max="105" value="${k.gewicht}" aria-label="Gewicht">
+    </div>
+    <div id="laufInfo"></div>`;
 
   const mb = $('#meilen');
   for (const l of [5, 15, 20, 30, 40, 55]) {
@@ -285,26 +292,65 @@ function zeichneBuild() {
 
   const lv = $('#lv');
   const aktualisiere = (voll) => {
-    const n = berechne(a, sn, E.level);
+    const v = verlauf(a, sn);
+    const r = v[E.level];
+    lv.value = E.level;
+    $('#lvZahl').textContent = E.level;
     $('#fuell').style.width = ((E.level - 1) / 54 * 100) + '%';
     document.querySelectorAll('.meilen').forEach(m => m.classList.toggle('auf', +m.dataset.l <= E.level));
-    $('#apZahl').textContent = n.apGenutzt; $('#apMax').textContent = n.apGesamt;
-    $('#apRest').textContent = n.apRest > 0 ? n.apRest + ' AP frei' : '';
     $('#kUnter').textContent = `${sn} · Level ${E.level}`;
-    const t = D.ereignisse[E.level];
-    $('#ereignis').innerHTML = t ? `<div class="hinweis" style="margin-top:12px;background:rgba(255,79,216,.09);
-      border-color:rgba(255,79,216,.25);color:#f3c6e9">${ic('i-stern', 16)}
-      <span>Level ${E.level} schaltet frei: <b style="color:#fff">${t}</b></span></div>` : '';
-    zeichneKarte(a, sn, n);
-    if (voll) zeichneRest(a, sn, n);
+    zeichneKarte(a, sn, r);
+    zeichneLauf(a, sn, v, r);
+    if (voll) zeichneRest(a, sn, v);
   };
+  const setzeLevel = (l) => {
+    l = Math.max(1, Math.min(55, l));
+    if (l === E.level) return;
+    tick(); E.level = l; merkeEinst(); aktualisiere(true);
+  };
+  $('#lvMinus').onclick = () => setzeLevel(E.level - 1);
+  $('#lvPlus').onclick = () => setzeLevel(E.level + 1);
   lv.oninput = () => {
     E.level = +lv.value;
     aktualisiere(false);
-    clearTimeout(lv._t); lv._t = setTimeout(() => { merkeEinst(); aktualisiere(true); }, 170);
+    clearTimeout(lv._t); lv._t = setTimeout(() => { merkeEinst(); aktualisiere(true); }, 140);
   };
-  lv.onchange = () => { merkeEinst(); aktualisiere(true); };
+  lv.onchange = () => { E.level = +lv.value; merkeEinst(); aktualisiere(true); };
+
+  const fuellK = () => {
+    for (const [id, min, max] of [['grR', 160, 205], ['gwR', 55, 105]]) {
+      const r2 = $('#' + id); if (r2) r2.style.setProperty('--p', ((r2.value - min) / (max - min) * 100) + '%');
+    }
+  };
+  fuellK();
+  const setzeK = () => {
+    fuellK();
+    E.koerper[a] = { groesse: +$('#grR').value, gewicht: +$('#gwR').value };
+    $('#grW').textContent = E.koerper[a].groesse + ' cm';
+    $('#gwW').textContent = E.koerper[a].gewicht + ' kg';
+    merkeEinst();
+    aktualisiere(false);
+    clearTimeout(setzeK._t); setzeK._t = setTimeout(() => aktualisiere(true), 220);
+  };
+  $('#grR').oninput = setzeK; $('#gwR').oninput = setzeK;
+
   aktualisiere(true);
+}
+
+/* Lauftyp: kurzer Hinweis unter den Reglern */
+function zeichneLauf(a, sn, v, r) {
+  const g = r.koerper.groesse, ziel = r.zielLauftyp;
+  let txt, warn = false;
+  if (ziel === 'Explosive' && g > 182) { txt = 'Über 182 cm ist <b>Explosive</b> nicht möglich. Geplant wird ohne Lauftyp-Vorgabe.'; warn = true; }
+  else if (ziel === 'Lengthy' && g < 183) { txt = 'Unter 183 cm ist <b>Lengthy</b> nicht möglich. Geplant wird ohne Lauftyp-Vorgabe.'; warn = true; }
+  else if (r.lauftypOk) txt = ziel === 'Controlled' ? 'Empfohlen ist Controlled. Passt.' : `<b>${ziel}</b> ist aktiv. Passt zur Empfehlung.`;
+  else {
+    const ab = abLevel(v, w => lauftypVon(w, g) === ziel);
+    txt = ab ? `Empfohlen ist <b>${ziel}</b>, aktiv ab Level ${ab}.` : `Empfohlen ist <b>${ziel}</b>, mit diesem Plan nicht erreichbar.`;
+  }
+  $('#laufInfo').innerHTML = `<div class="laufZeile${warn ? ' warn' : ''}">
+    <span class="laufBadge ${r.lauftyp}">${r.lauftyp}</span><span class="t">${txt}</span></div>
+    <div class="laufEmpf">Empfehlung für ${a}: ${D.archetypen[a].koerper.groesse} · ${D.archetypen[a].koerper.gewicht}</div>`;
 }
 
 function zeichneKarte(a, sn, r) {
@@ -343,192 +389,117 @@ const kurzAttr = x => ({
   'Aggressivität': 'AGGR.', 'Dribbling': 'DRIBB.', 'Abschluss': 'ABSCHL.', 'Schusskraft': 'SCHUSS', 'Sprungkraft': 'SPRUNG', 'Kurzer Pass': 'K.PASS', 'Langer Pass': 'L.PASS',
 }[x] || x.toUpperCase().slice(0, 7));
 
-function zeichneRest(a, sn, r) {
-  const d = D.archetypen[a], spez = d.spezialisierungen[sn];
+/* Grund eines Schritts für einen Wert */
+function grundFuer(r, attr, wert) {
+  const s = r.schritte.find(x => x.attr === attr && x.von < wert && wert <= x.ziel);
+  return s ? s.grund : '';
+}
+
+function zeichneRest(a, sn, v) {
+  const d = D.archetypen[a];
+  const r = v[E.level], vor = v[E.level - 1];
   const box = $('#rest');
   box.innerHTML = '';
-  const erlKey = a + '|' + sn;
-  const erl = E.erledigt[erlKey] || {};
 
-  /* Freischalt-Banner */
-  if (r.spezOk) {
-    box.append(el('div', 'frei', `<div class="haken">${ic('i-check', 19)}</div>
-      <div><div class="t">FREIGESCHALTET</div><div class="w">${sn}</div></div>`));
+  /* Änderungen dieses Levels */
+  const aend = [];
+  for (const lst of Object.values(D.kategorien)) for (const x of lst) {
+    if (r.werte[x] === undefined) continue;
+    const alt = vor.werte[x], neu = r.werte[x];
+    if (neu !== alt) aend.push({ attr: x, alt, neu, ap: kostenVon(a, x, alt, neu), grund: grundFuer(r, x, neu) });
   }
+  const neuAp = r.apGesamt - vor.apGesamt;
+  const ausgegeben = aend.reduce((x, y) => x + y.ap, 0);
+  const ereignis = D.ereignisse[E.level];
+  const titel = E.level === 1 ? 'Start → Level 1' : `Level ${E.level - 1} → ${E.level}`;
+  const schritt = el('div', 'karte schritt', `
+    <div class="schrittKopf"><h3>${ic('i-blitz', 15)}${titel}</h3><span class="apNeu">+${neuAp} AP</span></div>
+    ${aend.length ? `<div class="aendListe">${aend.map(x => `
+      <div class="aend"><span class="n">${x.attr}</span>
+        <span class="vw"><s>${x.alt}</s> → <b>${x.neu}</b></span>
+        ${x.grund ? `<span class="g">${x.grund}</span>` : ''}</div>`).join('')}</div>
+      <div class="schrittFuss">${aend.length} ${aend.length === 1 ? 'Wert' : 'Werte'} ändern · ${ausgegeben} AP${r.apRest > 0 ? ` · ${r.apRest} AP bleiben für später` : ''}</div>`
+    : `<div class="nix">Nichts zu setzen. Die ${r.apRest} AP sparst du für den nächsten teuren Punkt.</div>`}
+    ${ereignis ? `<div class="ereignis">${ic('i-stern', 14)}<span>Level ${E.level} schaltet frei: <b>${ereignis}</b></span></div>` : ''}`);
+  box.append(schritt);
 
-  /* Als Nächstes */
-  const naechst = r.offen.find(x => x.teil) || r.offen[0];
-  if (naechst) {
-    const hat = (naechst.erreicht ?? naechst.von) - naechst.von, ges = naechst.ziel - naechst.von;
-    box.append(el('div', 'karte jetzt', `
-      <h3>${ic('i-blitz', 15)}Als Nächstes</h3>
-      <div class="ziel">${naechst.attr} auf <b>${naechst.ziel}</b></div>
-      <div class="mini">${naechst.grund}. Steht bei ${naechst.erreicht ?? naechst.von}.</div>
-      <div class="fort"><i style="width:${Math.round(hat / ges * 100)}%"></i></div>`));
-  } else {
-    box.append(el('div', 'karte jetzt', `<h3>${ic('i-stern', 15)}Fertig</h3>
-      <div class="ziel">Alles abgehakt</div>
-      <div class="mini">${r.apRest > 0 ? r.apRest + ' AP sind übrig. Steck sie in Reaktion oder Ausdauer.' : 'Der Plan ist umgesetzt.'}</div>`));
-  }
-
-  /* Lauftyp */
-  const k = r.koerper;
-  const lk = el('div', 'karte', `<h3>${ic('i-lauf', 15)}Lauftyp und Körper</h3>
-    <div class="lauf">
-      <span class="laufBadge ${r.lauftyp}">${r.lauftyp}</span>
-      <span class="t">${r.lauftypOk ? 'Passt zur Empfehlung für ' + a + '.' : 'Empfohlen ist <b style="color:var(--txt)">' + r.zielLauftyp + '</b>.'}</span>
-    </div>
-    <div class="koerperRegler">
-      <div class="krZeile"><span>Größe</span><b id="grW">${k.groesse} cm</b></div>
-      <input type="range" class="einfach" id="grR" min="160" max="205" value="${k.groesse}">
-      <div class="krZeile" style="margin-top:8px"><span>Gewicht</span><b id="gwW">${k.gewicht} kg</b></div>
-      <input type="range" class="einfach" id="gwR" min="55" max="105" value="${k.gewicht}">
-    </div>
-    <div class="zeile" style="margin-top:10px"><span class="k">Empfehlung</span><span class="v">${d.koerper.groesse} · ${d.koerper.gewicht}</span></div>
-    <div id="laufWarn"></div>`);
-  box.append(lk);
-
-  const warnung = () => {
-    const w = [];
-    const g = r.koerper.groesse;
-    const b = r.werte.Beweglichkeit ?? 0, st = r.werte['Stärke'] ?? 0;
-    if (r.zielLauftyp === 'Explosive') {
-      if (g > 182) w.push('Über 182 cm ist Explosive nicht möglich. Die App plant jetzt ohne Lauftyp-Vorgabe.');
-      else {
-        if (b - st < 10) w.push(`Beweglichkeit muss 10 über Stärke liegen, steht bei ${b} zu ${st}. Stärke nicht weiter steigern.`);
-        if ((r.werte.Beschleunigung ?? 0) < 80) w.push('Beschleunigung muss auf 80, sonst bleibt der Pro Controlled.');
-      }
-    } else if (r.zielLauftyp === 'Lengthy') {
-      if (g < 183) w.push('Unter 183 cm ist Lengthy nicht möglich. Die App plant jetzt ohne Lauftyp-Vorgabe.');
-      else if (st - b < 4) w.push(`Stärke muss 4 über Beweglichkeit liegen, steht bei ${st} zu ${b}. Beweglichkeit nicht weiter steigern.`);
-    }
-    $('#laufWarn').innerHTML = w.length
-      ? `<div class="warnung">${ic('i-warn', 16)}<span>${w.join('<br>')}</span></div>` : '';
-  };
-  const fuell = () => {
-    for (const [id, min, max] of [['grR', 160, 205], ['gwR', 55, 105]]) {
-      const r2 = $('#' + id, lk); if (r2) r2.style.setProperty('--p', ((r2.value - min) / (max - min) * 100) + '%');
-    }
-  };
-  warnung(); fuell();
-  const setzeK = () => {
-    fuell();
-    E.koerper[a] = { groesse: +$('#grR').value, gewicht: +$('#gwR').value };
-    $('#grW').textContent = E.koerper[a].groesse + ' cm';
-    $('#gwW').textContent = E.koerper[a].gewicht + ' kg';
-    merkeEinst();
-    const n = berechne(a, sn, E.level);
-    const bd = lk.querySelector('.laufBadge');
-    bd.className = 'laufBadge ' + n.lauftyp; bd.textContent = n.lauftyp;
-    lk.querySelector('.lauf .t').innerHTML = n.lauftypOk ? 'Passt zur Empfehlung für ' + a + '.'
-      : 'Empfohlen ist <b style="color:var(--txt)">' + n.zielLauftyp + '</b>.';
-    Object.assign(r, n); warnung();
-    clearTimeout(setzeK._t);
-    setzeK._t = setTimeout(() => zeichneRest(a, sn, berechne(a, sn, E.level)), 260);
-  };
-  $('#grR', lk).oninput = setzeK; $('#gwR', lk).oninput = setzeK;
-
-  /* Einkaufsliste */
-  const liste = el('div', 'karte', `<h3>${ic('i-liste', 15)}Das musst du setzen</h3>`);
-  if (!r.offen.length) {
-    liste.append(el('div', 'quelle', 'Für Level ' + E.level + ' ist alles erledigt.'));
-  } else {
-    let phase = null;
-    for (const o of r.offen) {
-      if (o.phase !== phase) {
-        phase = o.phase;
-        const p = D.phasen[phase];
-        const ph = el('div', 'phase', p.kurz);
-        ph.style.cssText = `background:${p.farbe}1f;color:${p.farbe};border:1px solid ${p.farbe}44`;
-        liste.append(ph);
-      }
-      const bis = o.teil ? o.erreicht : o.ziel;
-      const punkte = bis - o.von;
-      const ap = o.teil ? (o.teilKosten ?? 0) : o.kosten;
-      const z = el('div', 'ekz' + (erl[o.attr + '>' + o.ziel] ? ' ok' : ''), `
-        <span class="hk">${ic('i-check', 15)}</span>
-        <span class="was"><b>${o.attr} auf ${bis}</b><span>${o.grund}${o.teil ? ` · Ziel ${o.ziel}, mehr geht auf diesem Level nicht` : ''}</span></span>
-        <span class="zahl"><b style="color:${punkte > 0 ? 'var(--gruen)' : 'var(--txt3)'}">+${punkte}</b>
-          <span>${ap} AP</span></span>`);
-      z.onclick = () => {
-        tick();
-        const kk = o.attr + '>' + o.ziel;
-        E.erledigt[erlKey] = E.erledigt[erlKey] || {};
-        if (E.erledigt[erlKey][kk]) delete E.erledigt[erlKey][kk]; else E.erledigt[erlKey][kk] = 1;
-        merkeEinst(); z.classList.toggle('ok');
-        const n = liste.querySelectorAll('.ekz:not(.ok)').length;
-        $('#summeOffen').textContent = n;
-      };
-      liste.append(z);
-    }
-    const summeAp = r.offen.reduce((x, o) => x + (o.teil ? (o.teilKosten ?? 0) : o.kosten), 0);
-    liste.append(el('div', 'summe', `<span><span id="summeOffen">${r.offen.filter(o => !erl[o.attr + '>' + o.ziel]).length}</span> offene Schritte</span><b>${summeAp} AP</b>`));
-    liste.append(el('div', 'quelle', 'Tipp an einen Schritt, um ihn abzuhaken. Die App merkt es sich.'));
-  }
-  box.append(liste);
-
-  /* Attribute */
-  const imPlan = new Set(r.schritte.map(x => x.attr));
-  const kat = el('div', 'karte', `<h3 style="justify-content:space-between">
-      <span style="display:flex;align-items:center;gap:8px">${ic('i-attr', 15)}Attribute</span>
-      <span class="filter"><button data-f="plan" class="${E.filter !== 'alle' ? 'an' : ''}">Mein Plan</button><button data-f="alle" class="${E.filter === 'alle' ? 'an' : ''}">Alle</button></span>
-    </h3>`);
-  kat.querySelectorAll('.filter button').forEach(b => b.onclick = () => { E.filter = b.dataset.f; merkeEinst(); zeichneRest(a, sn, r); });
+  /* Alle Attribute, zwei pro Zeile */
+  const geaendert = new Set(aend.map(x => x.attr));
+  const kat = el('div', 'karte', `<h3>${ic('i-attr', 15)}Deine Werte auf Level ${E.level}</h3>`);
   for (const [kn, lst] of Object.entries(D.kategorien)) {
-    let v = lst.filter(x => r.werte[x] !== undefined);
-    if (E.filter !== 'alle') v = v.filter(x => imPlan.has(x) || r.werte[x] !== r.basis[x]);
-    if (!v.length) continue;
+    const liste = lst.filter(x => r.werte[x] !== undefined);
+    if (!liste.length) continue;
     kat.append(el('div', 'kat', kn));
-    for (const attr of v) {
-      const w = r.werte[attr], b = r.basis[attr], zu = w - b;
-      const ziel = r.schritte.filter(x => x.attr === attr).map(x => x.ziel).pop();
+    const raster = el('div', 'werteRaster');
+    for (const attr of liste) {
+      const w = r.werte[attr], b = r.basis[attr];
+      const neu = geaendert.has(attr);
       const key = (d.schluessel || []).includes(attr);
-      kat.append(el('div', 'attr' + (zu ? '' : ' nix'), `
-        <div class="attrTop"><span class="n">${key ? '<i></i>' : ''}${attr}</span>
-          <span class="v">${w}${zu ? `<u>+${zu}</u>` : ''}</span></div>
-        <div class="bar"><span class="alt" style="width:${b}%"></span>
-          ${zu ? `<span class="neu" style="width:${w}%"></span>` : ''}
-          ${ziel && ziel > w ? `<span class="ziel" style="left:${ziel}%"></span>` : ''}</div>`));
+      const x = neu ? aend.find(y => y.attr === attr) : null;
+      raster.append(el('div', 'zelle' + (neu ? ' neu' : w === b ? ' basis' : ''), `
+        <span class="n">${key ? '<i title="Schlüsselattribut"></i>' : ''}${attr}</span>
+        <span class="w">${neu ? `<span class="vor">${x.alt} →</span>` : ''}<b>${w}</b>${neu ? `<span class="ap">${x.ap} AP</span>` : ''}</span>
+        <span class="bar"><span style="width:${w}%"></span></span>`));
     }
+    kat.append(raster);
   }
-  kat.append(el('div', 'quelle', '<i style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--gelb)"></i> Schlüsselattribut · <span style="color:var(--pink)">|</span> nächstes Ziel'));
+  kat.append(el('div', 'quelle', '<span class="lg neu"></span> ändert sich auf diesem Level &nbsp; <span class="lg key"></span> Schlüsselattribut &nbsp; blass = Startwert'));
   box.append(kat);
 
-  /* PlayStyles */
-  const frei = r.playstyles.filter(p => p.ok);
-  const nah = r.playstyles.filter(p => !p.ok && p.fehlt === 1).slice(0, 4);
-  box.append(el('div', 'karte', `<h3>${ic('i-blitz', 15)}PlayStyles</h3>
-    <div class="tags">${frei.length ? frei.map(p => `<span class="tag ok">${p.name}</span>`).join('') : '<span class="tag">Noch keiner frei</span>'}</div>
-    ${nah.length ? `<div class="kat" style="margin-top:15px">Fast geschafft</div><div class="tags">${nah.map(p => {
-      const f = p.teile.find(t => !t.ok);
-      return `<span class="tag">${p.name} <span style="color:var(--txt3)">· ${f.a} ${f.v}</span></span>`;
-    }).join('')}</div>` : ''}
-    <div class="kat" style="margin-top:15px">Signature</div>
-    <div class="tags">${d.signature.map(x => `<span class="tag pk">${x}</span>`).join('')}</div>`));
-
-  /* Strecke */
-  const plan = el('div', 'karte', `<h3>${ic('i-uhr', 15)}Deine Strecke</h3>`);
-  const pl = el('div', 'strecke');
-  const anzahl = r.schritte.length;
-  let fertigAnz = 0;
-  for (const p of r.schritte) {
-    const fertig = p.kumuliert <= r.apGenutzt;
-    const hier = !fertig && r.laufend && r.laufend.attr === p.attr && r.laufend.ziel === p.ziel;
-    if (fertig) fertigAnz++;
-    const ph = D.phasen[p.phase];
-    pl.append(el('div', 'st' + (fertig ? ' ok' : hier ? ' hier' : ''), `
-      <span class="w"><b>${p.attr}</b> auf ${p.ziel}</span>
-      <span class="l" style="${fertig || hier ? '' : 'color:' + ph.farbe + '99'}">${hier ? 'JETZT' : p.level ? 'ab L' + p.level : '> L55'}</span>`));
+  /* Spezialisierung */
+  const sp = el('div', 'karte', `<h3>${ic('i-stern', 15)}Spezialisierung</h3>`);
+  const spListe = el('div', 'spezListe');
+  for (const [n, x] of Object.entries(d.spezialisierungen)) {
+    const ab = abLevel(verlauf(a, n), w => erfuellt(w, x.ziele));
+    const frei = ab !== null && E.level >= ab;
+    const an = n === sn;
+    const b = el('button', 'spez' + (an ? ' an' : '') + (frei ? ' frei' : ' zu'), `
+      <span class="kopf"><b>${x.meta ? '★ ' : ''}${n}</b>
+        <span class="stat">${an ? 'Gewählt' : frei ? 'Wählbar' : ab ? 'ab Level ' + ab : 'nicht bis L55'}</span></span>
+      <span class="zz">${Object.entries(x.ziele).map(([y, z]) => `${y} ${z}`).join(' · ')}</span>
+      ${an && ab ? `<span class="zz" style="color:var(--txt2)">${frei ? 'Freigeschaltet seit' : 'Freigeschaltet ab'} Level ${ab}</span>` : ''}`);
+    b.disabled = !frei && !an;
+    if (frei && !an) b.onclick = () => { tick(); E.spez = n; merkeEinst(); zeichneBuild(); };
+    spListe.append(b);
   }
-  const leucht = el('span', 'leucht');
-  leucht.style.height = (anzahl ? (fertigAnz / anzahl * 100) : 0) + '%';
-  pl.append(leucht);
-  plan.append(pl);
-  const ges = r.schritte.reduce((x, y) => x + y.kosten, 0);
-  plan.append(el('div', 'quelle', `${r.schritte.length} Schritte · ${ges} AP${levelFuerAp(ges) ? ' · fertig ab Level ' + levelFuerAp(ges) : ' · passt nicht ganz in 1419 AP'}`));
-  box.append(plan);
+  sp.append(spListe);
+  sp.append(el('div', 'quelle', '★ = Meta. Wählbar wird eine Spezialisierung, sobald ihre drei Werte erreicht sind.'));
+  box.append(sp);
 
-  /* Meisterung + Quelle */
+  /* PlayStyles mit Level */
+  const slotLevel = [5, 15, 40, 55];
+  const empf = (d.slots || []).map(x => x.split(' (')[0]);
+  const daten = empf.map(n => {
+    const p = D.playstyles.find(q => q.n === n);
+    return { n, p, ab: p ? abLevel(v, w => erfuellt(w, p.v)) : null };
+  });
+  const sortiert = [...daten].sort((x, y) => (x.ab ?? 99) - (y.ab ?? 99));
+  sortiert.forEach((x, i) => {
+    const platz = slotLevel[i] ?? 55;
+    x.wann = x.p ? (x.ab === null ? null : Math.max(x.ab, platz)) : platz;
+    x.platz = i + 1;
+  });
+  const ps = el('div', 'karte', `<h3>${ic('i-blitz', 15)}PlayStyles</h3>`);
+  const pl = el('div', 'psListe');
+  for (const x of sortiert) {
+    const da = x.wann !== null && E.level >= x.wann;
+    const jetzt = x.wann === E.level;
+    pl.append(el('div', 'ps' + (da ? ' da' : '') + (jetzt ? ' jetzt' : ''), `
+      <span class="lvl">${x.wann ? 'L' + x.wann : '–'}</span>
+      <span class="was"><b>${x.n}</b><span>${x.p
+        ? (x.wann === null ? 'Schwelle mit diesem Plan nicht erreicht' : `Platz ${x.platz} · ${Object.entries(x.p.v).map(([y, z]) => y + ' ' + z).join(', ')}`)
+        : `Platz ${x.platz} · keine Attribut-Schwelle hinterlegt`}</span></span>
+      <span class="stat">${jetzt ? 'JETZT' : da ? ic('i-check', 15) : ''}</span>`));
+  }
+  ps.append(pl);
+  if (d.signature?.length) {
+    ps.append(el('div', 'kat', 'Signature'));
+    ps.append(el('div', 'tags', d.signature.map(x => `<span class="tag pk">${x}</span>`).join('')));
+  }
+  ps.append(el('div', 'quelle', 'Plätze öffnen sich bei Level 5, 15, 40 und 55. Ein PlayStyle passt in den Platz, sobald seine Werte erreicht sind.'));
+  box.append(ps);
+
+  /* Meisterung und Quelle */
   const sicher = { 'hoch': ['var(--gruen)', 'Gut belegt'], 'mittel-hoch': ['var(--gruen)', 'Gut belegt'],
     'mittel': ['var(--gelb)', 'Teils abgeleitet'], 'niedrig': ['var(--pink)', 'Quelle vor dem Patch'] }[d.sicherheit] || ['var(--txt2)', d.sicherheit];
   box.append(el('div', 'karte', `<h3>${ic('i-info', 15)}Meisterung und Quelle</h3>
@@ -537,9 +508,7 @@ function zeichneRest(a, sn, r) {
     <div class="zeile"><span class="k">Spezialbewegungen</span><span class="v">${'★'.repeat(d.sterne[0])}</span></div>
     <div class="zeile"><span class="k">Schwacher Fuß</span><span class="v">${'★'.repeat(d.sterne[1])}</span></div>
     <div class="zeile"><span class="k">Quelle</span><span class="v">${d.quelle}</span></div>
-    <div class="zeile"><span class="k">Stand</span><span class="v">${d.stand}</span></div>
-    <div class="zeile"><span class="k">Verlässlichkeit</span><span class="v" style="color:${sicher[0]}">${sicher[1]}</span></div>
-    <div style="margin-top:13px" class="hinweis">${ic('i-info', 16)}<span>Die Quellen nennen nur Meilensteine. Die Reihenfolge rechnet die App aus Lauftyp, PlayStyle-Schwellen und Punktkosten.</span></div>`));
+    <div class="zeile"><span class="k">Stand</span><span class="v">${d.stand} · <span style="color:${sicher[0]}">${sicher[1]}</span></span></div>`));
 }
 
 /* ---------- Formation ---------- */
