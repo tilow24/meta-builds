@@ -47,12 +47,17 @@ function punktKosten(stufe, v) {
   const k = D.kurven[stufe];
   return (k && k[v]) ?? (v < 40 ? 1 : 50);
 }
+const istStern = attr => !!(D.sterne && D.sterne[attr]);
+function punktKostenAttr(a, attr, v) {
+  if (istStern(attr)) return D.sterne[attr].kosten[v] ?? Infinity;
+  return punktKosten(stufeFuer(a, attr).stufe, v);
+}
 function kostenVon(a, attr, von, bis) {
-  const { stufe } = stufeFuer(a, attr);
   let s = 0;
-  for (let v = von; v < bis; v++) s += punktKosten(stufe, v);
+  for (let v = von; v < bis; v++) s += punktKostenAttr(a, attr, v);
   return s;
 }
+const sterneTxt = n => '★'.repeat(n);
 
 /* ---------- Lauftyp ---------- */
 function lauftypVon(werte, groesse) {
@@ -89,16 +94,24 @@ function schrittfolge(a, sn, zielLauftyp) {
     setze('Stärke', (werte.Beweglichkeit ?? 0) + 4, 1, 'Stärke muss 4 über Beweglichkeit liegen');
   }
 
+  // Phase 2: PlayStyle-Schwellen und die ersten Sterne (bis 4), nach Preis sortiert
   const empfohlen = new Set((d.slots || []).map(x => x.split(' (')[0]));
-  D.playstyles.filter(p => empfohlen.has(p.n)).map(p => {
+  const sz = d.sternZiel || {};
+  const posten = D.playstyles.filter(p => empfohlen.has(p.n)).map(p => {
     let ap = 0, ok = true;
     for (const [attr, v] of Object.entries(p.v)) {
       if (werte[attr] === undefined || v > maxWert(a, attr)) { ok = false; break; }
       ap += kostenVon(a, attr, werte[attr], v);
     }
-    return { p, ap, ok };
-  }).filter(g => g.ok && g.ap > 0).sort((x, y) => x.ap - y.ap)
-    .forEach(g => { for (const [attr, v] of Object.entries(g.p.v)) setze(attr, v, 2, 'Schaltet ' + g.p.n + ' frei'); });
+    return { ok, ap, ziele: Object.entries(p.v), grund: 'Schaltet ' + p.n + ' frei' };
+  });
+  for (const attr of ['Spezialbewegungen', 'Schwacher Fuß']) {
+    if (!sz[attr] || werte[attr] === undefined) continue;
+    const z = Math.min(sz[attr], 4);
+    posten.push({ ok: true, ap: kostenVon(a, attr, werte[attr], z), ziele: [[attr, z]], grund: 'Früh auf ' + z + ' Sterne, so raten die Quellen' });
+  }
+  posten.filter(g => g.ok && g.ap > 0).sort((x, y) => x.ap - y.ap)
+    .forEach(g => { for (const [attr, v] of g.ziele) setze(attr, v, 2, g.grund); });
 
   const ausbau = [];
   for (const { a: attr, b } of spez.prioritaet) {
@@ -108,6 +121,8 @@ function schrittfolge(a, sn, zielLauftyp) {
 
   for (const { attr, ziel } of ausbau) setze(attr, Math.min(ziel, 85), 3, 'Grundniveau');
   for (const [attr, v] of Object.entries(spez.ziele)) setze(attr, v, 4, 'Spezialisierung ' + sn);
+  for (const attr of ['Spezialbewegungen', 'Schwacher Fuß'])
+    if (sz[attr] > 4) setze(attr, sz[attr], 5, sz[attr] + ' Sterne laut Quelle');
   for (const { attr, ziel } of ausbau) setze(attr, Math.min(ziel, 90), 5, 'Ausbau');
   for (const { attr, ziel } of ausbau) setze(attr, ziel, 5, 'Feinschliff');
 
@@ -141,9 +156,8 @@ function berechne(a, sn, level) {
   for (const s of schritte) {
     if (s.kosten <= rest) { rest -= s.kosten; werte[s.attr] = s.ziel; continue; }
     // teilweise machbar
-    const { stufe } = stufeFuer(a, s.attr);
     let w = s.von, k2 = 0;
-    while (w < s.ziel && punktKosten(stufe, w) <= rest - k2) { k2 += punktKosten(stufe, w); w++; }
+    while (w < s.ziel && punktKostenAttr(a, s.attr, w) <= rest - k2) { k2 += punktKostenAttr(a, s.attr, w); w++; }
     rest -= k2; werte[s.attr] = w;
     break;
   }
@@ -416,7 +430,7 @@ function zeichneRest(a, sn, v) {
     <div class="schrittKopf"><h3>${ic('i-blitz', 15)}${titel}</h3><span class="apNeu">+${neuAp} AP</span></div>
     ${aend.length ? `<div class="aendListe">${aend.map(x => `
       <div class="aend"><span class="n">${x.attr}</span>
-        <span class="vw"><s>${x.alt}</s> → <b>${x.neu}</b></span>
+        <span class="vw">${istStern(x.attr) ? `<s>${x.alt} ★</s> → <b>${x.neu} ★</b>` : `<s>${x.alt}</s> → <b>${x.neu}</b>`}</span>
         ${x.grund ? `<span class="g">${x.grund}</span>` : ''}</div>`).join('')}</div>
       <div class="schrittFuss">${aend.length} ${aend.length === 1 ? 'Wert' : 'Werte'} ändern · ${ausgegeben} AP${r.apRest > 0 ? ` · ${r.apRest} AP bleiben für später` : ''}</div>`
     : `<div class="nix">Nichts zu setzen. Die ${r.apRest} AP sparst du für den nächsten teuren Punkt.</div>`}
@@ -436,10 +450,12 @@ function zeichneRest(a, sn, v) {
       const neu = geaendert.has(attr);
       const key = (d.schluessel || []).includes(attr);
       const x = neu ? aend.find(y => y.attr === attr) : null;
-      raster.append(el('div', 'zelle' + (neu ? ' neu' : w === b ? ' basis' : ''), `
+      const stern = istStern(attr);
+      const wert = stern ? `<b class="sterne">${sterneTxt(w)}<u>${sterneTxt(5 - w)}</u></b>` : `<b>${w}</b>`;
+      raster.append(el('div', 'zelle' + (stern ? ' stern' : '') + (neu ? ' neu' : w === b ? ' basis' : ''), `
         <span class="n">${key ? '<i title="Schlüsselattribut"></i>' : ''}${attr}</span>
-        <span class="w">${neu ? `<span class="vor">${x.alt} →</span>` : ''}<b>${w}</b>${neu ? `<span class="ap">${x.ap} AP</span>` : ''}</span>
-        <span class="bar"><span style="width:${w}%"></span></span>`));
+        <span class="w">${neu && !stern ? `<span class="vor">${x.alt} →</span>` : ''}${wert}${neu ? `<span class="ap">${x.ap} AP</span>` : ''}</span>
+        <span class="bar"><span style="width:${stern ? w / 5 * 100 : w}%"></span></span>`));
     }
     kat.append(raster);
   }
@@ -505,8 +521,10 @@ function zeichneRest(a, sn, v) {
   box.append(el('div', 'karte', `<h3>${ic('i-info', 15)}Meisterung und Quelle</h3>
     <div class="zeile"><span class="k">Meisterung L10</span><span class="v">+1 ${d.meisterung[0]}, +1 ${d.meisterung[1]}</span></div>
     <div class="zeile"><span class="k">Meisterung L30</span><span class="v">+1 ${d.meisterung[1]}</span></div>
-    <div class="zeile"><span class="k">Spezialbewegungen</span><span class="v">${'★'.repeat(d.sterne[0])}</span></div>
-    <div class="zeile"><span class="k">Schwacher Fuß</span><span class="v">${'★'.repeat(d.sterne[1])}</span></div>
+    <div class="zeile"><span class="k">Sterne-Ziel</span><span class="v">${d.sternZiel
+      ? `SB ${d.sternZiel['Spezialbewegungen']} ★ · SF ${d.sternZiel['Schwacher Fuß']} ★`
+      : 'Keine Quellenangabe'}</span></div>
+    ${d.sternZiel ? `<div class="zeile"><span class="k">Quelle Sterne</span><span class="v">${d.sternZiel.quelle}</span></div>` : ''}
     <div class="zeile"><span class="k">Quelle</span><span class="v">${d.quelle}</span></div>
     <div class="zeile"><span class="k">Stand</span><span class="v">${d.stand} · <span style="color:${sicher[0]}">${sicher[1]}</span></span></div>`));
 }
@@ -534,9 +552,9 @@ function zeichneForm() {
   $('#formOut').innerHTML = `
     <div class="pitch"><div class="form">${aktiv.formation}</div><div class="ti">${aktiv.tiefe}</div>
       <div class="feld">${pkt}</div>
-      <div class="quelle" style="margin-top:14px"><span style="color:var(--gruen)">●</span> Mensch &nbsp;
+      <div class="quelle" style="margin-top:14px"><span style="color:var(--gruen)">●</span> Player &nbsp;
         <span style="color:#5d7a99">●</span> KI</div></div>
-    <div class="karte"><h3>${ic('i-info', 15)}Warum diese</h3>
+    <div class="karte"><h3>${ic('i-info', 15)}Information</h3>
       <p style="margin:0;font-size:14px;color:var(--txt2)">${aktiv.warum}</p></div>
     <div class="karte"><h3>${ic('i-liste', 15)}So besetzt ihr</h3>
       <ul class="punkte">${aktiv.besetzen.map((b, i) => `<li><b style="color:var(--txt)">${i + 1}.</b> ${b}</li>`).join('')}</ul>
